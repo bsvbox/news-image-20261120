@@ -6,136 +6,135 @@ Friday 20 November 2026 as a 1024x1024 PNG, pixel by pixel, using only
 the Python standard library. No network access, fully deterministic:
 two runs write byte-identical files.
 
-News verified from real reporting on the morning of 20 Nov 2026
-(BBC, Reuters, AP, Times of India, Euronews):
-  - Trump, Xi and Putin hold their first three-way summit in Shenzhen.
-  - UN court rules Myanmar committed genocide against the Rohingya.
-  - Cyclone Akvan makes landfall in Odisha, India; mass evacuations.
-  - Anthropic debuts on the stock market at a ~$1.5T valuation.
-  - Tanker catches fire after hitting a mine east of the Strait of Hormuz.
-  - GTA VI launches worldwide.
-  - Voyager 1 reaches one light-day from Earth; its data flow stops.
-  - Russian strikes damage the Austrian and Dutch embassies in Kyiv.
+Run:  MAKEFUN_OUTPUT_DIR=out python3 main.py   (writes out/entry.png)
 """
+
+import binascii
+import math
 import os
 import struct
 import zlib
 
-W, H = 1024, 1024
+W = 1024
+H = 1024
 
-# Palette
+# ---------------------------------------------------------------- palette
 PAPER = (246, 241, 231)
-INK = (26, 26, 26)
 NAVY = (22, 35, 63)
-NAVY_DARK = (16, 26, 48)
-GOLD = (232, 184, 75)
+NAVY_DARK = (13, 22, 42)
+GOLD = (217, 164, 65)
+GOLD_LIGHT = (240, 196, 90)
 WHITE = (255, 255, 255)
-GRAY = (110, 105, 95)
-CARD = (255, 255, 255)
-BORDER = (216, 210, 196)
-RED = (192, 57, 43)
-TEAL = (14, 124, 123)
-ORANGE = (230, 126, 34)
-BLUE = (46, 111, 183)
-GREEN = (46, 125, 50)
-PURPLE = (123, 75, 148)
-PINK = (232, 93, 117)
+INK = (26, 26, 26)
+GREY = (74, 68, 56)
+BORDER = (201, 191, 169)
+SKYLINE = (26, 26, 46)
+RED_DARK = (122, 31, 31)
+TEAL = (14, 90, 122)
+GREEN = (30, 122, 52)
+BURNT = (179, 84, 30)
+PURPLE = (106, 31, 160)
+
+# ---------------------------------------------------------------- canvas
+canvas = bytearray(W * H * 3)
 
 
-# ---------------------------------------------------------------- PNG writer
-def _chunk(kind, data):
-    out = struct.pack(">I", len(data)) + kind + data
-    out += struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
-    return out
+def set_px(x, y, color):
+    if 0 <= x < W and 0 <= y < H:
+        i = (y * W + x) * 3
+        canvas[i] = color[0]
+        canvas[i + 1] = color[1]
+        canvas[i + 2] = color[2]
 
 
-def write_png(path, rgb, w, h):
-    raw = bytearray()
-    for y in range(h):
-        raw.append(0)
-        raw.extend(rgb[y * w * 3:(y + 1) * w * 3])
-    ihdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
-    data = b"\x89PNG\r\n\x1a\n"
-    data += _chunk(b"IHDR", ihdr)
-    data += _chunk(b"IDAT", zlib.compress(bytes(raw), 9))
-    data += _chunk(b"IEND", b"")
-    with open(path, "wb") as fh:
-        fh.write(data)
+def fill_rect(x, y, w, h, color):
+    if w <= 0 or h <= 0:
+        return
+    x0 = max(0, x)
+    y0 = max(0, y)
+    x1 = min(W, x + w)
+    y1 = min(H, y + h)
+    if x0 >= x1 or y0 >= y1:
+        return
+    row = bytes(color) * (x1 - x0)
+    for yy in range(y0, y1):
+        i = (yy * W + x0) * 3
+        canvas[i:i + len(row)] = row
 
 
-# ------------------------------------------------------------------- Canvas
-class Canvas:
-    def __init__(self, w, h, bg):
-        self.w, self.h = w, h
-        self.px = bytearray(w * h * 3)
-        self.fill_rect(0, 0, w, h, bg)
-
-    def set(self, x, y, c):
-        if 0 <= x < self.w and 0 <= y < self.h:
-            i = (y * self.w + x) * 3
-            self.px[i], self.px[i + 1], self.px[i + 2] = c
-
-    def fill_rect(self, x, y, w, h, c):
-        x0, y0 = max(x, 0), max(y, 0)
-        x1, y1 = min(x + w, self.w), min(y + h, self.h)
-        for yy in range(y0, y1):
-            base = (yy * self.w + x0) * 3
-            for xx in range(x0, x1):
-                i = base + (xx - x0) * 3
-                self.px[i], self.px[i + 1], self.px[i + 2] = c
-
-    def rect(self, x, y, w, h, c, t=1):
-        self.fill_rect(x, y, w, t, c)
-        self.fill_rect(x, y + h - t, w, t, c)
-        self.fill_rect(x, y, t, h, c)
-        self.fill_rect(x + w - t, y, t, h, c)
-
-    def line(self, x0, y0, x1, y1, c, t=1):
-        dx, dy = abs(x1 - x0), abs(y1 - y0)
-        sx = 1 if x0 < x1 else -1
-        sy = 1 if y0 < y1 else -1
-        err = dx - dy
-        while True:
-            for a in range(t):
-                for b in range(t):
-                    self.set(x0 + a, y0 + b, c)
-            if x0 == x1 and y0 == y1:
-                break
-            e2 = 2 * err
-            if e2 > -dy:
-                err -= dy
-                x0 += sx
-            if e2 < dx:
-                err += dx
-                y0 += sy
-
-    def circle(self, cx, cy, r, c, fill=True):
-        for yy in range(cy - r, cy + r + 1):
-            for xx in range(cx - r, cx + r + 1):
-                d2 = (xx - cx) ** 2 + (yy - cy) ** 2
-                if fill:
-                    if d2 <= r * r:
-                        self.set(xx, yy, c)
-                else:
-                    if abs(d2 - r * r) <= r:
-                        self.set(xx, yy, c)
-
-    def triangle(self, x0, y0, x1, y1, x2, y2, c):
-        ymin, ymax = min(y0, y1, y2), max(y0, y1, y2)
-        for yy in range(ymin, ymax + 1):
-            xs = []
-            for (ax, ay, bx, by) in ((x0, y0, x1, y1), (x1, y1, x2, y2), (x2, y2, x0, y0)):
-                if ay == by:
-                    continue
-                if min(ay, by) <= yy < max(ay, by):
-                    xs.append(ax + (yy - ay) * (bx - ax) / (by - ay))
-            if len(xs) >= 2:
-                for xx in range(int(min(xs)), int(max(xs)) + 1):
-                    self.set(xx, yy, c)
+def hline(x0, x1, y, color, thick=1):
+    for t in range(thick):
+        for x in range(x0, x1 + 1):
+            set_px(x, y + t, color)
 
 
-# -------------------------------------------------------------- 5x7 bitmap font
-# Each glyph: 7 rows of 5 bits, written as strings of 0/1.
+def vline(x, y0, y1, color, thick=1):
+    for t in range(thick):
+        for y in range(y0, y1 + 1):
+            set_px(x + t, y, color)
+
+
+def line(x0, y0, x1, y1, color, thick=1):
+    dx = abs(x1 - x0)
+    dy = -abs(y1 - y0)
+    sx = 1 if x0 < x1 else -1
+    sy = 1 if y0 < y1 else -1
+    err = dx + dy
+    x, y = x0, y0
+    while True:
+        for a in range(thick):
+            for b in range(thick):
+                set_px(x + a, y + b, color)
+        if x == x1 and y == y1:
+            break
+        e2 = 2 * err
+        if e2 >= dy:
+            err += dy
+            x += sx
+        if e2 <= dx:
+            err += dx
+            y += sy
+
+
+def fill_circle(cx, cy, r, color):
+    for dy in range(-r, r + 1):
+        dx = int(math.sqrt(max(0, r * r - dy * dy)))
+        for x in range(cx - dx, cx + dx + 1):
+            set_px(x, cy + dy, color)
+
+
+def circle_outline(cx, cy, r, color, thick=2):
+    for a in range(360):
+        rad = math.radians(a)
+        for t in range(thick):
+            set_px(int(cx + (r + t) * math.cos(rad)),
+                   int(cy + (r + t) * math.sin(rad)), color)
+
+
+def fill_triangle(x0, y0, x1, y1, x2, y2, color):
+    ymin = min(y0, y1, y2)
+    ymax = max(y0, y1, y2)
+    for y in range(ymin, ymax + 1):
+        xs = []
+        for (ax, ay, bx, by) in ((x0, y0, x1, y1), (x1, y1, x2, y2),
+                                 (x2, y2, x0, y0)):
+            if ay == by:
+                continue
+            if (y >= min(ay, by)) and (y < max(ay, by)):
+                xs.append(ax + (y - ay) * (bx - ax) / (by - ay))
+        if len(xs) >= 2:
+            for x in range(int(min(xs)), int(max(xs)) + 1):
+                set_px(x, y, color)
+
+
+def lerp(c1, c2, t):
+    return (int(c1[0] + (c2[0] - c1[0]) * t),
+            int(c1[1] + (c2[1] - c1[1]) * t),
+            int(c1[2] + (c2[2] - c1[2]) * t))
+
+
+# ---------------------------------------------------------------- 5x7 font
+# Each glyph: 7 rows of 5 bits, "1" = ink.
 FONT = {
     "A": ("01110", "10001", "10001", "11111", "10001", "10001", "10001"),
     "B": ("11110", "10001", "10001", "11110", "10001", "10001", "11110"),
@@ -159,7 +158,7 @@ FONT = {
     "T": ("11111", "00100", "00100", "00100", "00100", "00100", "00100"),
     "U": ("10001", "10001", "10001", "10001", "10001", "10001", "01110"),
     "V": ("10001", "10001", "10001", "10001", "10001", "01010", "00100"),
-    "W": ("10001", "10001", "10001", "10101", "10101", "10101", "01010"),
+    "W": ("10001", "10001", "10001", "10101", "10101", "11011", "10001"),
     "X": ("10001", "10001", "01010", "00100", "01010", "10001", "10001"),
     "Y": ("10001", "10001", "01010", "00100", "00100", "00100", "00100"),
     "Z": ("11111", "00001", "00010", "00100", "01000", "10000", "11111"),
@@ -180,251 +179,335 @@ FONT = {
     "&": ("01100", "10010", "10100", "01000", "10101", "10010", "01101"),
     "-": ("00000", "00000", "00000", "01110", "00000", "00000", "00000"),
     ":": ("00000", "01100", "01100", "00000", "01100", "01100", "00000"),
+    "/": ("00001", "00010", "00010", "00100", "01000", "01000", "10000"),
     "(": ("00010", "00100", "01000", "01000", "01000", "00100", "00010"),
     ")": ("01000", "00100", "00010", "00010", "00010", "00100", "01000"),
-    "!": ("00100", "00100", "00100", "00100", "00100", "00000", "00100"),
-    "?": ("01110", "10001", "00001", "00110", "00100", "00000", "00100"),
-    "/": ("00001", "00010", "00010", "00100", "01000", "01000", "10000"),
     "%": ("11001", "11010", "00010", "00100", "01000", "01011", "10011"),
     "$": ("00100", "01111", "10100", "01110", "00101", "11110", "00100"),
+    "!": ("00100", "00100", "00100", "00100", "00100", "00000", "00100"),
+    "?": ("01110", "10001", "00001", "00110", "00100", "00000", "00100"),
+    "+": ("00000", "00100", "00100", "01110", "00100", "00100", "00000"),
+    "=": ("00000", "00000", "11111", "00000", "11111", "00000", "00000"),
+    "*": ("00000", "10101", "01110", "10101", "00000", "00000", "00000"),
 }
 
 
-def text_width(s, scale):
-    return len(s) * (5 * scale + scale)
+def text_width(text, scale):
+    return len(text) * 6 * scale - scale
 
 
-def draw_text(cv, x, y, s, scale, color):
-    s = s.upper()
+def draw_text(x, y, text, scale, color):
+    text = text.upper()
     cx = x
-    for ch in s:
+    for ch in text:
         glyph = FONT.get(ch, FONT[" "])
         for row in range(7):
             bits = glyph[row]
             for col in range(5):
                 if bits[col] == "1":
-                    cv.fill_rect(cx + col * scale, y + row * scale, scale, scale, color)
-        cx += 5 * scale + scale
+                    fill_rect(cx + col * scale, y + row * scale,
+                              scale, scale, color)
+        cx += 6 * scale
     return cx
 
 
-def wrap_text(s, max_chars):
-    words = s.split(" ")
-    lines, cur = [], ""
-    for word in words:
-        trial = word if not cur else cur + " " + word
-        if len(trial) <= max_chars:
+def draw_text_centered(cx, y, text, scale, color):
+    x = cx - text_width(text, scale) // 2
+    draw_text(x, y, text, scale, color)
+
+
+def wrap_text(text, scale, max_width):
+    """Greedy word wrap; returns list of lines."""
+    words = text.upper().split(" ")
+    lines = []
+    cur = ""
+    for w in words:
+        trial = w if not cur else cur + " " + w
+        if text_width(trial, scale) <= max_width or not cur:
             cur = trial
         else:
-            if cur:
-                lines.append(cur)
-            cur = word
+            lines.append(cur)
+            cur = w
     if cur:
         lines.append(cur)
     return lines
 
 
-# --------------------------------------------------------------------- Icons
-def icon_scales(cv, x, y, w, h):
-    """Scales of justice: pole, crossbar, two pans."""
-    cx, top = x + w // 2, y + 8
-    cv.line(cx, top, cx, top + 62, NAVY, 3)
-    cv.line(cx - 34, top + 14, cx + 34, top + 14, NAVY, 3)
-    cv.line(cx - 34, top + 14, cx - 34, top + 22, NAVY, 2)
-    cv.line(cx + 34, top + 14, cx + 34, top + 22, NAVY, 2)
-    cv.triangle(cx - 48, top + 22, cx - 20, top + 22, cx - 34, top + 44, GOLD)
-    cv.triangle(cx + 20, top + 22, cx + 48, top + 22, cx + 34, top + 44, GOLD)
-    cv.fill_rect(cx - 30, top + 66, 60, 5, NAVY)
+# ---------------------------------------------------------------- PNG writer
+def chunk(ctype, data):
+    out = struct.pack(">I", len(data)) + ctype + data
+    out += struct.pack(">I", binascii.crc32(ctype + data) & 0xFFFFFFFF)
+    return out
 
 
-def icon_cyclone(cv, x, y, w, h):
-    """Spiral storm: concentric arcs plus rain slashes."""
-    cx, cy = x + w // 2, y + 52
-    for r, col in ((44, TEAL), (34, BLUE), (24, TEAL), (14, BLUE)):
-        cv.circle(cx, cy, r, col, fill=False)
-    cv.circle(cx, cy, 6, NAVY, fill=True)
-    for dx in (-52, -38, 38, 52):
-        cv.line(cx + dx, y + 84, cx + dx - 6, y + 100, BLUE, 2)
+def write_png(path):
+    raw = bytearray()
+    for y in range(H):
+        raw.append(0)  # filter: none
+        raw += canvas[y * W * 3:(y + 1) * W * 3]
+    ihdr = struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0)
+    png = b"\x89PNG\r\n\x1a\n"
+    png += chunk(b"IHDR", ihdr)
+    png += chunk(b"IDAT", zlib.compress(bytes(raw), 9))
+    png += chunk(b"IEND", b"")
+    with open(path, "wb") as f:
+        f.write(png)
+    return len(png)
 
 
-def icon_chart(cv, x, y, w, h):
-    """Rising bars and an arrow: a market debut."""
-    base = y + 92
-    for i, bh in enumerate((30, 48, 66, 88)):
-        bx = x + 18 + i * 34
-        cv.fill_rect(bx, base - bh, 22, bh, (TEAL, BLUE, GREEN, GOLD)[i])
-    cv.line(x + 14, base - 96, x + 14, base + 4, INK, 2)
-    cv.line(x + 14, base + 4, x + 150, base + 4, INK, 2)
-    cv.line(x + 22, base - 30, x + 56, base - 52, GREEN, 3)
-    cv.line(x + 56, base - 52, x + 92, base - 70, GREEN, 3)
-    cv.line(x + 92, base - 70, x + 130, base - 92, GREEN, 3)
-    cv.triangle(x + 130, base - 92, x + 116, base - 92, x + 130, base - 78, GREEN)
+# ---------------------------------------------------------------- lead panel
+def draw_flags():
+    # Three small flags, top right of the sky: USA, China, Russia.
+    fx, fy, fw, fh = 700, 122, 84, 30
+    gap = 12
+    # --- USA
+    x = fx
+    for s in range(7):
+        fill_rect(x, fy + s * 4, fw, 4,
+                  (178, 34, 52) if s % 2 == 0 else WHITE)
+    fill_rect(x, fy, 34, 16, (60, 59, 110))
+    for r in range(3):
+        for c in range(4):
+            fill_rect(x + 4 + c * 8, fy + 3 + r * 5, 2, 2, WHITE)
+    # --- China
+    x = fx + fw + gap
+    fill_rect(x, fy, fw, fh, (222, 41, 16))
+    fill_circle(x + 14, fy + 11, 5, GOLD_LIGHT)
+    for sx, sy in ((34, 6), (42, 11), (40, 19), (32, 20)):
+        fill_rect(x + sx, fy + sy, 3, 3, GOLD_LIGHT)
+    # --- Russia
+    x = fx + 2 * (fw + gap)
+    fill_rect(x, fy, fw, 10, WHITE)
+    fill_rect(x, fy + 10, fw, 10, (0, 57, 166))
+    fill_rect(x, fy + 20, fw, 10, (213, 0, 50))
 
 
-def icon_tanker(cv, x, y, w, h):
-    """A tanker with containers, flames above, waves below."""
-    hull_y = y + 62
-    cv.triangle(x + 16, hull_y, x + 150, hull_y, x + 134, hull_y + 22, RED)
-    cv.fill_rect(x + 16, hull_y, 134, 22, RED)
-    for i, col in enumerate((BLUE, GOLD, TEAL, GREEN)):
-        cv.fill_rect(x + 26 + i * 30, hull_y - 22, 24, 22, col)
-    cv.fill_rect(x + 128, hull_y - 34, 18, 34, NAVY)
-    for fx, fh in ((52, 26), (66, 38), (82, 24)):
-        cv.triangle(x + fx, hull_y - 22, x + fx + 14, hull_y - 22,
-                    x + fx + 7, hull_y - 22 - fh, ORANGE)
-    for wy in (hull_y + 32, hull_y + 42):
-        for wx in range(x + 10, x + 156, 24):
-            cv.line(wx, wy, wx + 12, wy - 5, BLUE, 2)
-            cv.line(wx + 12, wy - 5, wx + 24, wy, BLUE, 2)
+def draw_skyline():
+    # Deterministic Shenzhen-style silhouette with lit windows.
+    heights = [58, 84, 66, 96, 74, 110, 62, 88, 70, 102, 56, 92, 68, 78,
+               104, 60, 86, 72, 98, 64, 80, 58, 90, 66]
+    x = 8
+    i = 0
+    while x < W - 8 and i < len(heights):
+        bw = 36 if i % 3 else 44
+        bh = heights[i]
+        top = 270 - bh
+        fill_rect(x, top, bw, bh, SKYLINE)
+        if i % 4 == 1:  # antenna
+            vline(x + bw // 2, top - 14, top, SKYLINE, 3)
+        for wy in range(top + 8, 266, 12):
+            for wx in range(x + 5, x + bw - 5, 10):
+                if (wx * 7 + wy * 13 + i * 5) % 4 == 0:
+                    fill_rect(wx, wy, 3, 4, GOLD_LIGHT)
+        x += bw + 4
+        i += 1
 
 
-def icon_controller(cv, x, y, w, h):
-    """A game controller with a D-pad, buttons and a big VI."""
-    cx, cy = x + w // 2, y + 52
-    cv.fill_rect(cx - 62, cy - 26, 124, 52, NAVY_DARK)
-    cv.circle(cx - 62, cy - 26, 12, NAVY_DARK)
-    cv.circle(cx + 62, cy - 26, 12, NAVY_DARK)
-    cv.circle(cx - 62, cy + 26, 12, NAVY_DARK)
-    cv.circle(cx + 62, cy + 26, 12, NAVY_DARK)
-    cv.fill_rect(cx - 48, cy - 6, 26, 12, GOLD)
-    cv.fill_rect(cx - 39, cy - 15, 8, 30, GOLD)
-    for bx, by, col in ((38, -14, RED), (50, -2, GREEN), (38, 10, BLUE), (26, -2, GOLD)):
-        cv.circle(cx + bx, cy + by, 6, col)
-    draw_text(cv, cx - 13, cy - 32, "VI", 3, WHITE)
+def draw_lead():
+    # Sunset sky gradient, orange -> red -> purple.
+    top = (255, 154, 61)
+    mid = (232, 74, 95)
+    bot = (107, 58, 140)
+    for y in range(108, 270):
+        t = (y - 108) / 162.0
+        if t < 0.5:
+            c = lerp(top, mid, t * 2)
+        else:
+            c = lerp(mid, bot, (t - 0.5) * 2)
+        fill_rect(0, y, W, 1, c)
+    # Sun, low on the left.
+    fill_circle(185, 205, 42, (255, 214, 90))
+    fill_circle(185, 205, 32, (255, 232, 150))
+    draw_flags()
+    draw_skyline()
+    # Navy ribbon with the lead headline.
+    fill_rect(0, 270, W, 122, NAVY)
+    fill_rect(0, 270, W, 3, GOLD)
+    draw_text_centered(512, 284, "TRUMP, XI & PUTIN", 6, WHITE)
+    draw_text_centered(512, 330, "MEET IN SHENZHEN", 6, GOLD)
+    draw_text_centered(512, 374, "FIRST THREE-WAY SUMMIT ON NUCLEAR RISKS AND WAR",
+                       2, (220, 220, 220))
 
 
-def icon_voyager(cv, x, y, w, h):
-    """A probe dish against the stars, signal arcs fading out."""
-    cv.fill_rect(x + 8, y + 4, w - 16, 96, (11, 16, 38))
-    for sx, sy in ((30, 18), (60, 34), (110, 14), (140, 40), (44, 66), (120, 70), (90, 26), (20, 44)):
-        cv.set(x + sx, y + sy, WHITE)
-        cv.set(x + sx + 1, y + sy, WHITE)
-    cx, cy = x + w // 2, y + 58
-    cv.line(cx - 26, cy + 30, cx, cy + 4, GOLD, 3)
-    cv.line(cx + 26, cy + 30, cx, cy + 4, GOLD, 3)
-    cv.circle(cx, cy, 16, GOLD, fill=False)
-    cv.circle(cx, cy, 5, WHITE, fill=True)
-    for r in (20, 30):
-        cv.circle(cx + 46, cy - 30, r, GOLD, fill=False)
+# ---------------------------------------------------------------- card icons
+def icon_scales(cx, top):
+    # Scales of justice.
+    c = NAVY
+    vline(cx, top + 6, top + 78, c, 4)
+    hline(cx - 52, cx + 52, top + 12, c, 4)
+    fill_circle(cx, top + 6, 5, c)
+    for s in (-1, 1):
+        bx = cx + s * 52
+        line(bx, top + 14, bx - 16, top + 44, c, 2)
+        line(bx, top + 14, bx + 16, top + 44, c, 2)
+        fill_triangle(bx - 18, top + 44, bx + 18, top + 44, bx, top + 62, c)
+    hline(cx - 26, cx + 26, top + 80, c, 4)
 
 
-# ---------------------------------------------------------------------- Tiles
-def draw_tile(cv, x, y, w, h, accent, icon, headline, sub):
-    cv.fill_rect(x, y, w, h, CARD)
-    cv.rect(x, y, w, h, BORDER, 1)
-    cv.fill_rect(x, y, w, 8, accent)
-    icon(cv, x + 8, y + 16, w - 16, 108)
-    lines = wrap_text(headline, 24)
-    ty = y + 132
-    for ln in lines[:3]:
-        draw_text(cv, x + 12, ty, ln, 2, INK)
-        ty += 18
-    draw_text(cv, x + 12, ty + 8, sub, 1, GRAY)
+def icon_cyclone(cx, top):
+    c = TEAL
+    for r, ox, oy in ((34, 0, 0), (25, 6, 4), (16, 10, 8), (8, 12, 12)):
+        circle_outline(cx + ox, top + 36 + oy, r, c, 3)
+    fill_circle(cx + 12, top + 48, 5, c)
+    # Rain drops below the spiral.
+    for dx in (-38, -12, 14, 38):
+        fill_triangle(cx + dx - 5, top + 82, cx + dx + 5, top + 82,
+                      cx + dx, top + 70, c)
 
 
-def draw_flag_us(cv, x, y):
-    for i in range(7):
-        cv.fill_rect(x, y + i * 5, 54, 5, RED if i % 2 == 0 else WHITE)
-    cv.fill_rect(x, y, 24, 20, BLUE)
-    for sy in (3, 9, 15):
-        for sx in (4, 12, 20):
-            cv.set(x + sx, y + sy, WHITE)
+def icon_chart(cx, top):
+    c = GREEN
+    bars = [26, 44, 62, 82]
+    bx = cx - 58
+    for h in bars:
+        fill_rect(bx, top + 88 - h, 20, h, c)
+        bx += 30
+    line(cx - 62, top + 84, cx + 62, top + 6, (26, 26, 26), 4)
+    fill_triangle(cx + 62, top + 6, cx + 40, top + 4, cx + 58, top + 24,
+                  (26, 26, 26))
 
 
-def draw_flag_cn(cv, x, y):
-    cv.fill_rect(x, y, 54, 36, RED)
-    cv.circle(x + 11, y + 10, 4, GOLD, fill=True)
-    for sx, sy in ((26, 6), (32, 11), (32, 18), (26, 22)):
-        cv.set(x + sx, y + sy, GOLD)
-        cv.set(x + sx + 1, y + sy, GOLD)
+def icon_tanker(cx, top):
+    c = BURNT
+    # Hull and bow.
+    fill_rect(cx - 62, top + 46, 104, 26, (40, 40, 40))
+    fill_triangle(cx + 42, top + 46, cx + 70, top + 46, cx + 42, top + 72,
+                  (40, 40, 40))
+    fill_rect(cx - 52, top + 30, 18, 16, (40, 40, 40))
+    fill_rect(cx - 30, top + 38, 60, 8, c)
+    # Flame above the deck.
+    fill_triangle(cx - 8, top + 30, cx + 12, top + 30, cx + 2, top + 2,
+                  (255, 140, 0))
+    fill_triangle(cx - 2, top + 30, cx + 8, top + 30, cx + 3, top + 14,
+                  (255, 220, 60))
+    # Waves.
+    for wy in (top + 80, top + 90):
+        for x in range(cx - 70, cx + 70, 14):
+            line(x, wy, x + 7, wy - 5, TEAL, 3)
+            line(x + 7, wy - 5, x + 14, wy, TEAL, 3)
 
 
-def draw_flag_ru(cv, x, y):
-    cv.fill_rect(x, y, 54, 12, WHITE)
-    cv.fill_rect(x, y + 12, 54, 12, BLUE)
-    cv.fill_rect(x, y + 24, 54, 12, RED)
-    cv.rect(x, y, 54, 36, INK, 1)
+def icon_controller(cx, top):
+    c = PURPLE
+    fill_rect(cx - 56, top + 18, 112, 44, c)
+    fill_circle(cx - 56, top + 40, 22, c)
+    fill_circle(cx + 56, top + 40, 22, c)
+    fill_circle(cx - 34, top + 34, 7, WHITE)
+    fill_circle(cx + 30, top + 28, 5, GOLD_LIGHT)
+    fill_circle(cx + 42, top + 40, 5, WHITE)
+    fill_circle(cx + 30, top + 50, 5, (255, 120, 120))
+    draw_text_centered(cx, top + 66, "VI", 4, NAVY)
 
 
-# --------------------------------------------------------------------- Layout
-def draw_masthead(cv):
-    cv.fill_rect(0, 0, W, 104, NAVY)
-    title = "THE WORLD IN ONE PAGE"
-    tw = text_width(title, 5)
-    draw_text(cv, (W - tw) // 2, 14, title, 5, WHITE)
-    date = "FRIDAY 20 NOVEMBER 2026"
-    dw = text_width(date, 2)
-    draw_text(cv, (W - dw) // 2, 66, date, 2, GOLD)
-    cv.fill_rect(0, 104, W, 4, GOLD)
+def icon_voyager(cx, top, x0, w):
+    # Starfield panel with a deep-space probe.
+    fill_rect(x0, top, w, 96, NAVY_DARK)
+    for i in range(46):
+        sx = x0 + 8 + (i * 53 + 17) % (w - 16)
+        sy = top + 6 + (i * 37 + 11) % 84
+        fill_rect(sx, sy, 2, 2, WHITE if i % 5 else GOLD_LIGHT)
+    # Probe body, dish and antenna.
+    fill_rect(cx - 8, top + 44, 34, 14, GOLD)
+    fill_triangle(cx + 26, top + 38, cx + 26, top + 64, cx + 48, top + 51,
+                  (200, 200, 210))
+    line(cx - 8, top + 51, cx - 30, top + 62, GOLD_LIGHT, 3)
+    fill_circle(cx - 32, top + 63, 4, GOLD_LIGHT)
+    line(cx + 10, top + 44, cx + 22, top + 28, (200, 200, 210), 3)
+    # No in-panel label: the headline below already says it, and text here
+    # would collide with the antenna boom.
 
 
-def draw_lead(cv):
-    x0, x1, y0, y1 = 8, 1016, 108, 392
-    # Sunset sky: bands from orange through pink to purple.
-    bands = [(255, 158, 79), (244, 120, 96), (232, 93, 117), (178, 84, 138), (123, 75, 148)]
-    band_h = (270 - y0) // len(bands)
-    for i, col in enumerate(bands):
-        cv.fill_rect(x0, y0 + i * band_h, x1 - x0, band_h, col)
-    # Sun.
-    cv.circle(830, 176, 38, (255, 209, 102), fill=True)
-    cv.circle(830, 176, 30, (255, 224, 138), fill=True)
-    # Three flags, top right of the sky.
-    draw_flag_us(cv, 690, 128)
-    draw_flag_cn(cv, 762, 128)
-    draw_flag_ru(cv, 834, 128)
-    # Shenzhen skyline silhouette.
-    heights = [58, 96, 74, 120, 66, 104, 82, 132, 70, 92, 60, 108, 78, 116, 64, 88]
-    bx = x0
-    for i, bh in enumerate(heights):
-        bw = 62
-        cv.fill_rect(bx, 270 - bh, bw, bh, NAVY_DARK)
-        for wy in range(270 - bh + 10, 266, 16):
-            for wx in range(bx + 8, bx + bw - 8, 14):
-                if (wx + wy + i) % 3 == 0:
-                    cv.fill_rect(wx, wy, 4, 5, GOLD)
-        bx += bw
-    # Headline band.
-    cv.fill_rect(x0, 270, x1 - x0, y1 - 270, NAVY)
-    draw_text(cv, 32, 284, "TRUMP, XI & PUTIN", 4, WHITE)
-    draw_text(cv, 32, 320, "MEET IN SHENZHEN", 4, GOLD)
-    draw_text(cv, 32, 362, "FIRST THREE-WAY SUMMIT ON NUCLEAR RISKS AND WAR", 2, WHITE)
+ICONS = {
+    "scales": icon_scales,
+    "cyclone": icon_cyclone,
+    "chart": icon_chart,
+    "tanker": icon_tanker,
+    "controller": icon_controller,
+}
 
 
-def draw_page(cv):
-    cv.fill_rect(0, 0, W, H, PAPER)
-    draw_masthead(cv)
-    draw_lead(cv)
-    tiles = [
-        (RED, icon_scales, "MYANMAR GUILTY OF GENOCIDE",
-         "UN court rules on the Rohingya"),
-        (TEAL, icon_cyclone, "CYCLONE AKVAN SLAMS INDIA",
-         "Odisha landfall, mass evacuations"),
-        (GREEN, icon_chart, "ANTHROPIC DEBUTS AT $1.5T",
-         "Among the world's most valuable firms"),
-        (ORANGE, icon_tanker, "TANKER BURNS IN THE GULF",
-         "Mine strike east of the Strait of Hormuz"),
-        (PURPLE, icon_controller, "GTA VI IS FINALLY OUT",
-         "Gamers queue as launch day arrives"),
-        (NAVY, icon_voyager, "VOYAGER 1 REACHES ONE LIGHT-DAY OUT",
-         "Its signal falls silent at the edge"),
+def draw_card(x, y, accent, label, icon, headline, sub):
+    w, h = 330, 280
+    fill_rect(x, y, w, h, WHITE)
+    # Border.
+    hline(x, x + w - 1, y, BORDER, 2)
+    hline(x, x + w - 1, y + h - 1, BORDER, 2)
+    vline(x, y, y + h - 1, BORDER, 2)
+    vline(x + w - 1, y, y + h - 1, BORDER, 2)
+    # Accent label bar.
+    fill_rect(x + 2, y + 2, w - 4, 22, accent)
+    draw_text(x + 12, y + 7, label, 2, WHITE)
+    # Icon.
+    top = y + 30
+    if icon == "voyager":
+        icon_voyager(x + w // 2, top, x + 16, w - 32)
+    else:
+        ICONS[icon](x + w // 2, top)
+    # Headline, up to two lines, scale 3.
+    lines = wrap_text(headline, 3, w - 24)
+    hy = y + 140
+    for ln in lines[:2]:
+        draw_text(x + 12, hy, ln, 3, INK)
+        hy += 26
+    # Sub-headline, up to two lines, scale 2.
+    sub_lines = wrap_text(sub, 2, w - 24)
+    sy = y + 196
+    for ln in sub_lines[:2]:
+        draw_text(x + 12, sy, ln, 2, GREY)
+        sy += 17
+
+
+# ---------------------------------------------------------------- page
+def draw_page():
+    fill_rect(0, 0, W, H, PAPER)
+    # Masthead.
+    fill_rect(0, 0, W, 104, NAVY)
+    draw_text_centered(512, 20, "THE WORLD IN ONE PAGE", 5, WHITE)
+    draw_text_centered(512, 64, "FRIDAY 20 NOVEMBER 2026", 3, GOLD)
+    fill_rect(0, 104, W, 4, GOLD)
+    draw_lead()
+    # Six story cards, 2 rows x 3 columns.
+    cards = [
+        (RED_DARK, "WORLD", "scales",
+         "MYANMAR GUILTY OF GENOCIDE",
+         "UN COURT RULES ON THE ROHINGYA"),
+        (TEAL, "INDIA", "cyclone",
+         "CYCLONE AKVAN SLAMS INDIA",
+         "ODISHA LANDFALL, MASS EVACUATIONS"),
+        (GREEN, "MARKETS", "chart",
+         "ANTHROPIC DEBUTS AT $1.5T",
+         "AMONG THE WORLD'S MOST VALUABLE FIRMS"),
+        (BURNT, "ENERGY", "tanker",
+         "TANKER BURNS IN THE GULF",
+         "MINE STRIKE EAST OF THE STRAIT OF HORMUZ"),
+        (PURPLE, "GAMES", "controller",
+         "GTA VI IS FINALLY OUT",
+         "GAMERS QUEUE AS LAUNCH DAY ARRIVES"),
+        (NAVY, "SPACE", "voyager",
+         "VOYAGER 1 REACHES ONE LIGHT-DAY OUT",
+         "ITS SIGNAL FALLS SILENT AT THE EDGE"),
     ]
     xs = (8, 346, 684)
     ys = (400, 688)
-    for i, (accent, icon, head, sub) in enumerate(tiles):
-        draw_tile(cv, xs[i % 3], ys[i // 3], 330, 280, accent, icon, head, sub)
-    also = "ALSO TODAY: RUSSIAN STRIKES DAMAGE AUSTRIAN AND DUTCH EMBASSIES IN KYIV"
-    draw_text(cv, 8, 978, also, 1, INK)
-    foot = "COMPILED FROM BBC, REUTERS, AP AND TIMES OF INDIA - 20 NOVEMBER 2026"
-    fw = text_width(foot, 1)
-    draw_text(cv, (W - fw) // 2, 1002, foot, 1, GRAY)
+    for i, (accent, label, icon, headline, sub) in enumerate(cards):
+        draw_card(xs[i % 3], ys[i // 3], accent, label, icon, headline, sub)
+    # Also-today strip.
+    fill_rect(8, 974, 1008, 22, NAVY)
+    draw_text(16, 979, "ALSO TODAY: RUSSIAN STRIKES DAMAGE AUSTRIAN AND DUTCH EMBASSIES IN KYIV",
+              2, WHITE)
+    # Footer.
+    draw_text_centered(512, 1004,
+                       "COMPILED FROM BBC, REUTERS, AP AND TIMES OF INDIA - 20 NOVEMBER 2026",
+                       2, GREY)
 
 
 def main():
-    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "out")
+    draw_page()
+    out_dir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
     os.makedirs(out_dir, exist_ok=True)
-    cv = Canvas(W, H, PAPER)
-    draw_page(cv)
-    write_png(os.path.join(out_dir, "entry.png"), cv.px, W, H)
+    path = os.path.join(out_dir, "entry.png")
+    size = write_png(path)
+    print(f"wrote {path} {W}x{H} {size} bytes")
 
 
 if __name__ == "__main__":
